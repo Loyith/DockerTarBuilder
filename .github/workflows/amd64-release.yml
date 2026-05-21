@@ -8,6 +8,10 @@ on:
         required: true
         default: 'alpine:latest,alpine/curl,busybox:stable-glibc'
 
+# 加上全局环境变量，强制所有 Action 跑在 Node.js 24 上，根除弃用警告
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   pull_and_package:
     runs-on: ubuntu-22.04
@@ -18,9 +22,19 @@ jobs:
       - name: Pull Docker Images and Package
         run: |
           images="${{ github.event.inputs.docker_images }}"
+          if [ -z "$images" ]; then
+            echo "❌ 错误：docker_images 输入为空，请填写合法的镜像名称！"
+            exit 1
+          fi
+
           IFS=',' read -r -a image_array <<< "$images"
           for image in "${image_array[@]}"; do
+            # 自动去除可能存在的首尾空格，防止 docker pull 识别出错
+            image=$(echo "$image" | xargs)
+            
+            echo "正在拉取并打包镜像: ${image}..."
             docker pull "${image}" --platform "linux/amd64"
+            
             image_name="${image//\//_}"
             image_name="${image_name//:/_}"
             docker save "${image}" -o "${image_name}-amd64.tar"
@@ -35,8 +49,9 @@ jobs:
           release_name=$(TZ="Asia/Shanghai" date +'%Y-%m-%d %H:%M Build')
           echo "RELEASE_NAME=$release_name" >> $GITHUB_ENV
 
+      # 修复点 1：将 @master 统一改为稳定的 @v2 版本
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@master
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: DockerTarBuilder-AMD64
           name: ${{ env.RELEASE_NAME }} for x86-64
@@ -51,11 +66,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # 修复点 2：统一使用 @v2，防止多步上传时版本冲突
       - name: Upload Docker images as release assets
-        uses: softprops/action-gh-release@v2.1.0
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: DockerTarBuilder-AMD64
           files: ${{ github.workspace }}/*.tar.gz
-          token: ${{ secrets.GITHUB_TOKEN }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
